@@ -425,6 +425,7 @@ class Docker {
                             'sys_chroot',
                             'setfcap',
                         ]),
+                        CapAdd: ['sys_ptrace'],
                         NetworkMode: Config.get('docker.network.name', 'pterodactyl_nw'),
                     },
                 }, (err, container) => {
