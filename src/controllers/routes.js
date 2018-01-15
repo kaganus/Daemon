@@ -303,7 +303,7 @@ class RouteController {
             if (allowedErr || !isAllowed) return;
 
             if (!_.isUndefined(this.req.params.command)) {
-                if (_.startsWith(_.replace(_.trim(this.req.params.command), /^\/*/, ''), Auth.server().service.object.stop)) {
+                if (_.startsWith(_.replace(_.trim(this.req.params.command), /^\/*/, ''), _.get(Auth.server(), 'services.config.stop'))) {
                     Auth.allowed('s:power:stop', (powerErr, powerIsAllowed) => {
                         if (powerErr || !powerIsAllowed) return;
 
@@ -329,7 +329,12 @@ class RouteController {
 
             Auth.server().fs.directory(this.req.params[0], (err, data) => {
                 if (err) {
-                    return Responses.generic500(err);
+                    switch (err.code) {
+                    case 'ENOENT':
+                        return this.res.send(404);
+                    default:
+                        return Responses.generic500(err);
+                    }
                 }
                 return this.res.send(data);
             });
@@ -343,7 +348,12 @@ class RouteController {
 
             Auth.server().fs.read(this.req.params[0], (err, data) => {
                 if (err) {
-                    return Responses.generic500(err);
+                    switch (err.code) {
+                    case 'ENOENT':
+                        return this.res.send(404);
+                    default:
+                        return Responses.generic500(err);
+                    }
                 }
                 return this.res.send({ content: data });
             });
@@ -369,7 +379,12 @@ class RouteController {
 
             Auth.server().fs.stat(this.req.params[0], (err, data) => {
                 if (err) {
-                    return Responses.generic500(err);
+                    switch (err.code) {
+                    case 'ENOENT':
+                        return this.res.send(404);
+                    default:
+                        return Responses.generic500(err);
+                    }
                 }
                 return this.res.send(data);
             });

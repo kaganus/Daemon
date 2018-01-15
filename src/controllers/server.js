@@ -309,7 +309,7 @@ class Server extends EventEmitter {
                     const humanReadable = Math.round(size / (1000 * 1000));
                     this.currentDiskUsed = humanReadable;
 
-                    if (this.json.build.disk > 0 && (size - (10 * 1000 * 1000)) > (this.json.build.disk * 1000 * 1000)) {
+                    if (this.json.build.disk > 0 && size > (this.json.build.disk * 1000 * 1000)) {
                         this.emit('console', `${Ansi.style.yellow}[Pterodactyl Daemon] Not enough disk space! ${humanReadable}M / ${this.json.build.disk}M`);
                         return callback(new Error('There is not enough available disk space to start this server.'));
                     }
@@ -517,11 +517,18 @@ class Server extends EventEmitter {
             if (err) return self.log.warn(err);
 
             self.currentDiskUsed = Math.round(size / (1000 * 1000)); // eslint-disable-line
-            if (self.json.build.disk > 0 && (size - (10 * 1000 * 1000)) > (self.json.build.disk * 1000 * 1000)) {
+            if (self.json.build.disk > 0 && size > (self.json.build.disk * 1000 * 1000)) {
                 self.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Server is violating disk space limits. Stopping process.`);
-                self.stop(stopErr => {
-                    self.log.error(stopErr);
-                });
+
+                if (Config.get('actions.disk.kill', true)) {
+                    self.kill(killErr => {
+                        if (killErr) self.log.error(killErr);
+                    });
+                } else {
+                    self.stop(stopErr => {
+                        if (stopErr) self.log.error(stopErr);
+                    });
+                }
             }
         });
     }
@@ -607,12 +614,14 @@ class Server extends EventEmitter {
 
         // Update 127.0.0.1 to point to the docker0 interface.
         if (newObject.build.default.ip === '127.0.0.1') {
-            newObject.build.default.ip = Config.get('docker.interface', '172.18.0.1');
+            newObject.build.default.ip = Config.get('docker.network.ispn', false) ? '' : Config.get('docker.interface');
         }
 
         _.forEach(newObject.build.ports, (ports, ip) => {
             if (ip === '127.0.0.1') {
-                newObject.build.ports[Config.get('docker.interface', '172.18.0.1')] = ports;
+                if (!Config.get('docker.network.ispn', false)) {
+                    newObject.build.ports[Config.get('docker.interface')] = ports;
+                }
                 delete newObject.build.ports[ip];
             }
         });

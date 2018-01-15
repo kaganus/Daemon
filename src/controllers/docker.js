@@ -272,21 +272,23 @@ class Docker {
      * @return {Callback}
      */
     update(next) {
-        // How Much Swap?
-        let swapSpace = 0;
-        if (this.server.json.build.swap < 0) {
-            swapSpace = -1;
-        } else if (this.server.json.build.swap > 0 && this.server.json.build.memory > 0) {
-            swapSpace = ((this.server.json.build.memory + this.server.json.build.swap) * 1000000);
+        const config = this.server.json.build;
+
+        const ContainerConfiguration = {
+            BlkioWeight: config.io,
+            CpuQuota: (config.cpu > 0) ? config.cpu * 1000 : -1,
+            CpuPeriod: 100000,
+            CpuShares: _.get(config, 'cpu_shares', 1024),
+            Memory: this.hardlimit(config.memory) * 1000000,
+            MemoryReservation: config.memory * 1000000,
+            MemorySwap: -1,
+        };
+
+        if (config.swap >= 0) {
+            ContainerConfiguration.MemorySwap = (this.hardlimit(config.memory) + config.swap) * 1000000;
         }
 
-        this.container.update({
-            CpuQuota: (this.server.json.build.cpu > 0) ? (this.server.json.build.cpu * 1000) : -1,
-            CpuPeriod: (this.server.json.build.cpu > 0) ? 100000 : 0,
-            Memory: this.server.json.build.memory * 1000000,
-            MemorySwap: swapSpace,
-            BlkioWeight: this.server.json.build.io,
-        }, next);
+        this.container.update(ContainerConfiguration, next);
     }
 
     /**
@@ -301,6 +303,12 @@ class Docker {
         const environment = [];
         Async.auto({
             update_images: callback => {
+                // Skip local images.
+                if (_.startsWith(config.image, '~')) {
+                    Log.debug(Util.format('Skipping pull attempt for %s as it is marked as a local image.', _.trimStart(config.image, '~')));
+                    return callback();
+                }
+
                 // The default is to not automatically update images.
                 if (!Config.get('docker.autoupdate_images', true)) {
                     ImageHelper.exists(config.image, err => {
@@ -350,18 +358,11 @@ class Docker {
                     return callback(new Error('No docker image was passed to the script. Unable to create container!'));
                 }
 
-                // How Much Swap?
-                let swapSpace = 0;
-                if (config.swap < 0) {
-                    swapSpace = -1;
-                } else if (config.swap > 0 && config.memory > 0) {
-                    swapSpace = ((config.memory + config.swap) * 1000 * 1000);
-                }
                 // Make the container
-                DockerController.createContainer({
-                    Image: config.image,
+                const Container = {
+                    Image: _.trimStart(config.image, '~'),
                     name: this.server.json.uuid,
-                    Hostname: 'container',
+                    Hostname: this.server.json.uuid,
                     User: Config.get('docker.container.user', 1000).toString(),
                     AttachStdin: true,
                     AttachStdout: true,
@@ -391,44 +392,35 @@ class Docker {
                             '/tmp': Config.get('docker.policy.container.tmpfs', 'rw,exec,nosuid,size=50M'),
                         },
                         PortBindings: bindings,
-                        OomKillDisable: config.oom_disabled || false,
-                        CpuQuota: (config.cpu > 0) ? (config.cpu * 1000) : -1,
-                        CpuPeriod: (config.cpu > 0) ? 100000 : 0,
-                        Memory: this.hardlimit(config.memory) * 1000 * 1000,
-                        MemoryReservation: config.memory * 1000 * 1000,
-                        MemorySwap: swapSpace,
+                        Memory: this.hardlimit(config.memory) * 1000000,
+                        MemoryReservation: config.memory * 1000000,
+                        MemorySwap: -1,
+                        CpuQuota: (config.cpu > 0) ? config.cpu * 1000 : -1,
+                        CpuPeriod: 100000,
+                        CpuShares: _.get(config, 'cpu_shares', 1024),
                         BlkioWeight: config.io,
-                        Dns: Config.get('docker.dns', [
-                            '8.8.8.8',
-                            '8.8.4.4',
-                        ]),
+                        Dns: Config.get('docker.dns', ['8.8.8.8', '8.8.4.4']),
                         LogConfig: {
                             Type: Config.get('docker.policy.container.log_driver', 'none'),
                         },
-                        SecurityOpt: Config.get('docker.policy.container.securityopts', [
-                            'no-new-privileges',
-                        ]),
+                        SecurityOpt: Config.get('docker.policy.container.securityopts', ['no-new-privileges']),
                         ReadonlyRootfs: Config.get('docker.policy.container.readonly_root', true),
                         CapDrop: Config.get('docker.policy.container.cap_drop', [
-                            'setpcap',
-                            'mknod',
-                            'audit_write',
-                            'chown',
-                            'net_raw',
-                            'dac_override',
-                            'fowner',
-                            'fsetid',
-                            'kill',
-                            'setgid',
-                            'setuid',
-                            'net_bind_service',
-                            'sys_chroot',
-                            'setfcap',
+                            'setpcap', 'mknod', 'audit_write', 'chown', 'net_raw',
+                            'dac_override', 'fowner', 'fsetid', 'kill', 'setgid',
+                            'setuid', 'net_bind_service', 'sys_chroot', 'setfcap',
                         ]),
                         CapAdd: ['sys_ptrace'],
                         NetworkMode: Config.get('docker.network.name', 'pterodactyl_nw'),
+                        OomKillDisable: _.get(config, 'oom_disabled', false),
                     },
-                }, (err, container) => {
+                };
+
+                if (config.swap >= 0) {
+                    Container.HostConfig.MemorySwap = (this.hardlimit(config.memory) + config.swap) * 1000000;
+                }
+
+                DockerController.createContainer(Container, (err, container) => {
                     callback(err, container);
                 });
             }],
@@ -436,7 +428,7 @@ class Docker {
             if (err) return next(err);
             return next(null, {
                 id: data.create_container.id,
-                image: config.image,
+                image: _.trimStart(config.image, '~'),
             });
         });
     }
