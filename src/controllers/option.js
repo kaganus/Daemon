@@ -89,7 +89,7 @@ class Option {
                     // No script defined, skip the rest.
                     const error = new Error('No installation script was defined for this egg, skipping rest of process.');
                     error.code = 'E_NOSCRIPT';
-                    return error;
+                    return callback(error);
                 }
 
                 this.server.log.debug('Writing temporary file to be handed into the Docker container.');
@@ -128,7 +128,7 @@ class Option {
                 this.server.log.debug('Running privileged docker container to perform the installation process.');
 
                 const environment = [];
-                _.each(_.get(results.details, 'env', []), (value, key) => {
+                _.forEach(_.get(results.details, 'env', []), (value, key) => {
                     environment.push(`${key}=${value}`);
                 });
 
