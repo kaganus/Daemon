@@ -97,7 +97,7 @@ class FileSystem {
             chownTarget = this.server.path(file);
         }
 
-        const Exec = Process.spawn('chown', ['-R', Util.format('%d:%d', Config.get('docker.container.user', 1000), Config.get('docker.container.user', 1000)), chownTarget], {});
+        const Exec = Process.spawn('chown', ['-R', Util.format('%s:%s', Config.get('docker.container.username', 'pterodactyl'), Config.get('docker.container.username', 'pterodactyl')), chownTarget], {});
         Exec.on('error', execErr => {
             this.server.log.error(execErr);
             return next(new Error('There was an error while attempting to set ownership of files.'));
@@ -475,12 +475,16 @@ class FileSystem {
                     Async.auto({
                         do_stat: aCallback => {
                             Fs.stat(Path.join(this.server.path(path), item), (statErr, stat) => {
+                                // Handle bad symlinks
+                                if (statErr && statErr.code === 'ENOENT') {
+                                    return eachCallback();
+                                }
                                 aCallback(statErr, stat);
                             });
                         },
                         do_mime: aCallback => {
                             Mime.detectFile(Path.join(this.server.path(path), item), (mimeErr, result) => {
-                                aCallback(mimeErr, result);
+                                aCallback(null, result);
                             });
                         },
                         do_push: ['do_stat', 'do_mime', (results, aCallback) => {

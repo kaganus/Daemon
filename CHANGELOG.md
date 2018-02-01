@@ -1,16 +1,21 @@
 # Changelog
 This file is a running track of new features and fixes to each version of the daemon released starting with `v0.2.0`.
 
-## v0.5.0-beta.6 (Dazzling Daohugoupterus)
+## v0.5.0-rc.1 (Dazzling Daohugoupterus)
 ### Fixed
 * Fixes a bug that would prevent daemon boot if a docker image was missing and assigned to a server that needed to be rebuilt.
 * Fixes a bug prevent server installation when no script is defined.
 * Fixes bug causing packs to fail installation due to an unpacking issue.
 * Fixes support for symlinked files in the file manager and returns the proper mime type for them.
+* `[beta.6]` — Fixes bug when creating a user on CentOS.
+* `[beta.6]` — Fixes a bug with Cyberduck where files could not be overwritten.
+* Fixes 404 error that would arise from bad symlinks in the server data directory.
 
 ### Added
 * Adds support for Docker Weave setups.
 * Adds support for parsing files using XML format.
+* Server boot process now sets the correct ownership on files when the server is booted.
+* Files uploaded via SFTP are now blocked if there is not enough server space available to store it.
 
 ## v0.5.0-beta.5 (Dazzling Daohugoupterus)
 ### Added

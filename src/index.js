@@ -136,11 +136,27 @@ Async.auto({
     },
     setup_sftp_user: ['check_structure', 'check_tar', 'check_zip', (r, callback) => {
         Log.debug('Checking if a SFTP user needs to be created and assigned to the configuration.');
-        Async.series([
+        Async.waterfall([
             scall => {
-                let UserCommand = 'adduser --system --no-create-home --shell /bin/false --disabled-password --disabled-login';
+                Log.debug(`Checking if user ${Config.get('docker.container.username', 'pterodactyl')} exists or needs to be created.`);
+                Proc.exec(`cat /etc/passwd | grep ${Config.get('docker.container.username', 'pterodactyl')}`, {}, (err, stdout) => {
+                    // grep outputs exit code 1 with no output when
+                    // nothing is matched.
+                    if (err && err.code === 1 && _.isEmpty(stdout)) {
+                        return scall(null, false);
+                    }
+
+                    scall(err, !_.isEmpty(stdout));
+                });
+            },
+            (exists, scall) => {
+                if (exists) {
+                    return scall();
+                }
+
+                let UserCommand = 'adduser --system --no-create-home --shell /bin/false --group';
                 if (!_.isUndefined(process.env.IS_ALPINE) && process.env.IS_ALPINE === 'true') {
-                    UserCommand = 'adduser -S -D -H -s /bin/false';
+                    UserCommand = `addgroup -S ${Config.get('docker.container.username', 'pterodactyl')} && adduser -S -D -H -G ${Config.get('docker.container.username', 'pterodactyl')} -s /bin/false`;
                 }
                 Proc.exec(`${UserCommand} ${Config.get('docker.container.username', 'pterodactyl')}`, {}, err => {
                     if (err && (!_.includes(err.message, 'already exists') || !_.includes(err.message, `user '${Config.get('docker.container.username', 'pterodactyl')}' in use`))) {
