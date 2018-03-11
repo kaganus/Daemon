@@ -1,6 +1,55 @@
 # Changelog
 This file is a running track of new features and fixes to each version of the daemon released starting with `v0.2.0`.
 
+## v0.5.5 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes diagnostics script to not die when reading large files and also includes the container name in output for easier linking to a server.
+* Fix a potential exception loop when attempting to rebuild a container that does not exist to begin with.
+* Server output is now correct and not split across lines.
+
+### Changed
+* Cleans up docker container removal and makes debugging messages clearer.
+* Reason for process crash (OOM, ErrorText, and ErrorCode) are now output into the logs and the console output for processes.
+* Server output throttling is handled differently now and should no longer kill processes that are simply outputting long amounts of data. DoS attacks are recognized and killed in under 1 second, rather than the 30 seconds of previous versions. `internals.throttle.bytes` was removed and replaced with `internals.throttle.lines` with a default value of `1000`.
+
+## v0.5.4 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes a potential docker issue from float64 values being passed in rather than int64.
+* Fixes a bug where the daemon would not correctly identify a server's docker container, now uses the UUID to find the container.
+* Fix permissions checking when getting base information about a server to allow subusers to view status in panel.
+
+### Changed
+* Errors returned by the panel when checking a daemon access token are now logged properly.
+
+## v0.5.3 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes bad function call in `xml-headless` egg parser.
+* Fixes issue with Filezilla SFTP client on uploads > 1GB preventing them from being resumed correctly.
+
+### Changed
+* Sending a command when the server is offline now returns a HTTP/412 error.
+
+## v0.5.2 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes missing environment variable in installation script for eggs.
+
+### Added
+* Added a `internals.throttle.enabled` flag to the config to allow disabling the throttle entirely if needed.
+
+### Changed
+* Bumped the default throttle limit to 30Kb every 100ms to hopefully prevent any issues with normal output.
+
+## v0.5.1 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes command used to create a user on the Daemon to work with all supported OSes.
+* Fixes output throttling behavior to not lock up the daemon and adjusts limits to `40 KB` of data per second before data is tossed.
+
+### Added
+* Servers that trigger a data volume warning more than 5 times in the span of 25 seconds (with 10 second decay per warning) will be killed. This type of event should only occur when a server is flooding output to the console.
+
+### Changed
+* Disk usage is now checked every 30 seconds by default to reduce the load on a server.
+
 ## v0.5.0 (Dazzling Daohugoupterus)
 ### Fixed
 * Fixes an edge case scenario where a server's data directory might not exist when a container is created.

@@ -2,7 +2,7 @@
 
 /**
  * Pterodactyl - Daemon
- * Copyright (c) 2015 - 2017 Dane Everitt <dane@daneeveritt.com>.
+ * Copyright (c) 2015 - 2018 Dane Everitt <dane@daneeveritt.com>.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -30,7 +30,8 @@ const Util = require('util');
 const _ = require('lodash');
 const Carrier = require('carrier');
 const Fs = require('fs-extra');
-const ThrottledReader = require('throttled-reader');
+const Ansi = require('ansi-escape-sequences');
+const Moment = require('moment');
 
 const Log = rfr('src/helpers/logger.js');
 const Status = rfr('src/helpers/status.js');
@@ -57,7 +58,7 @@ const CONST_STDMEM = Config.get('docker.memory.std.value', 10240);
 class Docker {
     constructor(server, next) {
         this.server = server;
-        this.containerID = _.get(this.server.json, 'container.id', null);
+        this.containerID = _.get(this.server.json, 'uuid', null);
         this.container = DockerController.getContainer(this.containerID);
         this.stream = undefined;
         this.procStream = undefined;
@@ -133,6 +134,9 @@ class Docker {
      * @return {[type]}        [description]
      */
     kill(next) {
+        if (isStream(this.stream)) {
+            this.stream.end();
+        }
         this.container.kill(next);
     }
 
@@ -177,24 +181,85 @@ class Docker {
             this.stream = stream;
             this.stream.setEncoding('utf8');
 
-            const Throttled = new ThrottledReader(this.stream, {
-                rate: Config.get('docker.stream_throttle_bps', 512),
-                cooldownInterval: 250,
-            });
+            if (!_.isNull(this.checkingThrottleInterval)) {
+                clearInterval(this.checkingThrottleInterval);
+                this.checkingThrottleInterval = null;
+            }
 
-            // Sends data once EOL is reached.
-            Carrier.carry(Throttled, data => {
-                this.server.output(data);
-            });
+            if (!_.isNull(this.checkingMessageInterval)) {
+                clearInterval(this.checkingMessageInterval);
+                this.checkingMessageInterval = null;
+            }
+
+            let DataBuffer = '';
+            let ConsoleThrottleMessageSent = false;
+            let ThrottleMessageCount = 0;
+            let LastThrottleMessageTime = Moment().subtract(Config.get('internals.throttle.decay_seconds', 10), 'seconds');
+            let ConsoleIsThrottled = true;
+            let LinesSent = 0;
 
             this.stream
+                .on('data', data => {
+                    if (ConsoleIsThrottled) {
+                        return;
+                    }
+
+                    const lines = _.split(DataBuffer + data, /\r?\n/);
+                    const length = lines.length - 1;
+
+                    DataBuffer = lines[length] || '';
+                    LinesSent += length;
+
+                    if (LinesSent > Config.get('internals.throttle.line_limit', 1000) && Config.get('internals.throttle.enabled', true)) {
+                        ConsoleIsThrottled = true;
+
+                        if (ThrottleMessageCount >= Config.get('internals.throttle.kill_at_count', 5) && this.server.status !== Status.STOPPING) {
+                            this.server.output(`${Ansi.style.red} [Pterodactyl Daemon] Your server is sending too much data, process is being killed.`);
+                            this.server.log.warn('Server has triggered automatic kill due to excessive data output. Potential DoS attack.');
+                            this.server.kill(() => {}); // eslint-disable-line
+                        }
+
+                        if (!ConsoleThrottleMessageSent) {
+                            ThrottleMessageCount += 1;
+                            LastThrottleMessageTime = Moment();
+                            this.server.log.debug({ throttleCount: ThrottleMessageCount }, 'Server is being throttled due to too much data being passed through the console.');
+                            this.server.output(`${Ansi.style.yellow} [Pterodactyl Daemon] This output is now being throttled due to output speed!`);
+                        }
+
+                        return;
+                    }
+
+                    for (let i = 0; i < length; i++) { // eslint-disable-line
+                        this.server.output(lines[i]);
+                    }
+                })
                 .on('end', () => {
                     this.stream = undefined;
+
+                    clearInterval(this.checkingThrottleInterval);
+                    clearInterval(this.checkingMessageInterval);
+                    this.checkingThrottleInterval = null;
+                    this.checkingMessageInterval = null;
+
                     this.server.streamClosed();
                 })
                 .on('error', streamError => {
                     this.server.log.error(streamError);
                 });
+
+            this.checkingThrottleInterval = setInterval(() => {
+                ConsoleIsThrottled = false;
+                LinesSent = 0;
+            }, Config.get('internals.throttle.check_interval_ms', 100));
+
+            this.checkingMessageInterval = setInterval(() => {
+                ConsoleThrottleMessageSent = false;
+                // Happened within 10 seconds of previous, increment the counter. Otherwise,
+                // subtract a throttle down to 0.
+                if (Moment(LastThrottleMessageTime).add(Config.get('internals.throttle.decay_seconds', 10), 'seconds').isBefore(Moment())) {
+                    ThrottleMessageCount = ThrottleMessageCount === 0 ? 0 : ThrottleMessageCount - 1;
+                }
+            }, 5000);
 
             // Go ahead and setup the stats stream so we can pull data as needed.
             this.stats(next);
@@ -235,13 +300,13 @@ class Docker {
             CpuQuota: (config.cpu > 0) ? config.cpu * 1000 : -1,
             CpuPeriod: 100000,
             CpuShares: _.get(config, 'cpu_shares', 1024),
-            Memory: this.hardlimit(config.memory) * 1000000,
-            MemoryReservation: config.memory * 1000000,
+            Memory: Math.round(this.hardlimit(config.memory) * 1000000),
+            MemoryReservation: Math.round(config.memory * 1000000),
             MemorySwap: -1,
         };
 
         if (config.swap >= 0) {
-            ContainerConfiguration.MemorySwap = (this.hardlimit(config.memory) + config.swap) * 1000000;
+            ContainerConfiguration.MemorySwap = Math.round((this.hardlimit(config.memory) + config.swap) * 1000000);
         }
 
         this.container.update(ContainerConfiguration, next);
@@ -349,8 +414,8 @@ class Docker {
                             '/tmp': Config.get('docker.policy.container.tmpfs', 'rw,exec,nosuid,size=50M'),
                         },
                         PortBindings: bindings,
-                        Memory: this.hardlimit(config.memory) * 1000000,
-                        MemoryReservation: config.memory * 1000000,
+                        Memory: Math.round(this.hardlimit(config.memory) * 1000000),
+                        MemoryReservation: Math.round(config.memory * 1000000),
                         MemorySwap: -1,
                         CpuQuota: (config.cpu > 0) ? config.cpu * 1000 : -1,
                         CpuPeriod: 100000,
@@ -374,7 +439,7 @@ class Docker {
                 };
 
                 if (config.swap >= 0) {
-                    Container.HostConfig.MemorySwap = (this.hardlimit(config.memory) + config.swap) * 1000000;
+                    Container.HostConfig.MemorySwap = Math.round((this.hardlimit(config.memory) + config.swap) * 1000000);
                 }
 
                 DockerController.createContainer(Container, (err, container) => {
@@ -384,7 +449,6 @@ class Docker {
         }, (err, data) => {
             if (err) return next(err);
             return next(null, {
-                id: data.create_container.id,
                 image: _.trimStart(config.image, '~'),
             });
         });
@@ -398,7 +462,8 @@ class Docker {
         FindContainer.inspect(err => {
             if (!err) {
                 this.container.remove(next);
-            } else if (err && _.startsWith(_.get(err, 'json.message', 'error'), 'No such container')) { // no such container
+            } else if (err && _.startsWith(err.reason, 'no such container')) { // no such container
+                this.server.log.debug({ container_id: container }, 'Attempting to remove a container that does not exist, continuing without error.');
                 return next();
             } else {
                 return next(err);

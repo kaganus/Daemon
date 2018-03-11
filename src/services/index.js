@@ -85,7 +85,7 @@ class Core {
                 this.parser.xml(file, _.get(data, 'find', {}), callback);
                 break;
             case 'xml-headless':
-                this.parser.xmlHeadless(file, _.get(data, 'find', {}, callback));
+                this.parser.xmlHeadless(file, _.get(data, 'find', {}), callback);
                 break;
             default:
                 return callback(new Error('Parser assigned to file is not valid.'));
@@ -103,6 +103,10 @@ class Core {
     onConsole(data) {
         Async.parallel([
             () => {
+                if (_.startsWith(data, '> ' || _.startsWith(data, '=> '))) {
+                    data = data.substr(2);
+                }
+
                 this.server.emit('console', data);
             },
             () => {

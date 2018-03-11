@@ -2,7 +2,7 @@
 
 /**
  * Pterodactyl - Daemon
- * Copyright (c) 2015 - 2017 Dane Everitt <dane@daneeveritt.com>.
+ * Copyright (c) 2015 - 2018 Dane Everitt <dane@daneeveritt.com>.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -128,6 +128,9 @@ class Option {
                 this.server.log.debug('Running privileged docker container to perform the installation process.');
 
                 const environment = [];
+                environment.push(`SERVER_MEMORY=${this.server.json.build.memory}`);
+                environment.push(`SERVER_IP=${this.server.json.build.default.ip}`);
+                environment.push(`SERVER_PORT=${this.server.json.build.default.port}`);
                 _.forEach(_.get(results.details, 'env', []), (value, key) => {
                     environment.push(`${key}=${value}`);
                 });
