@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+const https = require('https');
 const rfr = require('rfr');
 const Async = require('async');
 const Proc = require('child_process');
@@ -57,6 +58,16 @@ const Stats = new LiveStats();
 const Service = new ServiceController();
 const Timezone = new TimezoneHelper();
 const Sftp = new SftpServer();
+
+const userDefinedCAStores = Config.get('internals.ca_stores', []);
+if (userDefinedCAStores.length > 0) {
+    Log.info('Found user provided CA store settings, synchronously applying those now...');
+
+    https.globalAgent.options.ca = [];
+    _.forEach(userDefinedCAStores, store => {
+        https.globalAgent.options.ca.push(Fs.readFileSync(store));
+    });
+}
 
 Log.info('Modules loaded, starting Pterodactyl Daemon...');
 Async.auto({
@@ -109,6 +120,12 @@ Async.auto({
         Log.debug('Unzip module found on server.');
     },
     check_sftp_rsa_key: callback => {
+        // Support for new standalone SFTP server.
+        if (!Config.get('sftp.enabled', true)) {
+            Log.debug('Not creating SFTP keys, disabled internal server...');
+            return callback();
+        }
+
         Log.debug('Checking for SFTP id_rsa key...');
         Fs.stat('./config/.sftp/id_rsa', err => {
             if (err && err.code === 'ENOENT') {
@@ -171,7 +188,10 @@ Async.auto({
                     break;
                 case 'Ubuntu Linux':
                 case 'Debian':
+                case 'Fedora':
                 case 'Centos':
+                case 'RHEL':
+                case 'Red Hat Linux':
                     UserCommand = `useradd --system --no-create-home --shell /bin/false ${Username}`;
                     break;
                 default:
@@ -238,6 +258,12 @@ Async.auto({
         return callback();
     }],
     init_sftp: ['init_websocket', 'check_sftp_rsa_key', (r, callback) => {
+        // Support for new standalone SFTP server.
+        if (!Config.get('sftp.enabled', true)) {
+            Log.debug('Not initializing SFTP server, disabled...');
+            return callback();
+        }
+
         Log.info('Configuring internal SFTP server...');
         Sftp.init(callback);
     }],

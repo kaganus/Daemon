@@ -1,6 +1,90 @@
 # Changelog
 This file is a running track of new features and fixes to each version of the daemon released starting with `v0.2.0`.
 
+## v0.6.8 (Elasticized Elanodactylus)
+### Changed
+* Bumped internal thresholds for memory management in containers to provide slightly more overhead to avoid OOM issues.
+* Added support for disabling the built-in SFTP server to allow for standalone options.
+
+## v0.6.7 (Elasticized Elanodactylus)
+### Fixed
+* Fix a bug that would cause a server to silently get stuck while in preflight if a config file couldn't be parsed. Now
+the process will continue forward and just emit a notice into the console.
+
+## v0.6.6 (Elasticized Elanodactylus)
+### Fixed
+* Fixes an issue with the `mmmagic` dependency not installing correctly when using Nodejs v10.
+* Close the server logs correctly when a server is deleted.
+* Fixes a bug causing servers to hang in the 'Starting server container' state if there was an error with the container.
+12
+* Fix a bug in the SFTP system that would cause a request failure if a file didn't return a valid time created/modified.
+* Handle an unknown flag sent from Cyberduck when creating a file.
+
+### Changed
+* A non-zero response code from an installer script will now mark a server as having failed installation.
+* Less confusing error output when the SFTP subsystem encounters an issue. Will now properly log the error rather than
+cause a second error that covers up the initial error.
+
+### Added
+* Adds initial beta support for defining custom CA stores that the daemon will use when making HTTPS requests. These
+can be set by defining an array of file locations using `internals.ca_stores` in the Daemon configuration.
+
+## v0.6.5 (Elasticized Elanodactylus)
+### Changed
+* A server that stops cleanly (`ExitCode: 0`) will still trigger crash detection by default. In a previous release we
+changed this behavior, and while a logical change, it has caused issues with a larger chunk of users than anticipated.
+This setting is now configurable at a global level with `internals.clean_exit_is_crash` setting which defaults to `true`.
+
+## v0.6.4 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a bug with command sending that would cause the request to never complete, thus leading the Panel sending
+commands over and over in scheduled tasks.
+
+### Changed
+* Archives created by the Panel are now named in a more logical manner based on the name of the file that they
+were created from.
+
+## v0.6.3 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a broken crash detection system due to a forgotten callback.
+* Fixes an error that would occur when a server was rebuilt and the Docker container log path changed on the Daemon.
+
+### Changed
+* Changes the way crash handling works to not forcibly restart the server process if it exits cleanly. This means you
+can have plugins stop your server and it will not automatically restart on you. Only processes that exit with code `0`
+will be left in the stopped state, all other unexpected stops will result in an automatic restart.
+* Less confusing server status indicators when being rebuilt, now completely stops before rebuilding.
+
+## v0.6.2 (Elasticized Elanodactylus)
+### Fixed
+* Changed behavior of Daemon initialization to check for the existance of a server's data directory before initializing
+that server. If the data directory cannot be found a warning is thrown and the server is not registered.
+* Fixes an error that would cause a loaded console to not display any previous logs due to a supressed JSON parse error.
+* Re-adds pulling docker images with authentication, this was accidentally removed while debugging some issues.
+
+## v0.6.1 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a bug that prevented sending commands to a running server instance. This was due to a regression in the command
+handling logic. (aka, too much delete).
+
+## v0.6.0 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a bug with XML parsing that would cause Nodejs to be unhappy when reading and writing files.
+* Fixes a race condition in the route handling that would cause errors to be thrown on busy daemons.
+* Daemon no longer fails to boot if it is unable to pull a remote Docker image assuming one already exists on the host system.
+
+### Changed
+* Changes the way that server output is handled to allow easier viewing of startup errors early in the process.
+
+### Added
+* Better support for RHEL when booting the daemon.
+* Support for sending more specific stop signals to running processes. Prefix with `^` followed by the signal name, for example: `^SIGHUP` or `^SIGKILL`.
+
+## v0.5.6 (Dazzling Daohugoupterus)
+### Fixed
+* Fixes SFTP server to play nicely with FileZilla and not respond with 4 of the same file.
+* Fixes a bug when doing multiple replacements on a single line for configurations.
+
 ## v0.5.5 (Dazzling Daohugoupterus)
 ### Fixed
 * Fixes diagnostics script to not die when reading large files and also includes the container name in output for easier linking to a server.

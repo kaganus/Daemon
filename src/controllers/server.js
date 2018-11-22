@@ -22,7 +22,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-const rfr = require('rfr');
 const Async = require('async');
 const moment = require('moment');
 const _ = require('lodash');
@@ -34,19 +33,18 @@ const extendify = require('extendify');
 const Ansi = require('ansi-escape-sequences');
 const Request = require('request');
 const Cache = require('memory-cache');
-const Randomstring = require('randomstring');
-const isStream = require('isstream');
 
-const Log = rfr('src/helpers/logger.js');
-const Docker = rfr('src/controllers/docker.js');
-const Status = rfr('src/helpers/status.js');
-const ConfigHelper = rfr('src/helpers/config.js');
-const Websocket = rfr('src/http/socket.js').ServerSockets;
-const UploadSocket = rfr('src/http/upload.js');
-const PackSystem = rfr('src/controllers/pack.js');
-const FileSystem = rfr('src/controllers/fs.js');
-const OptionController = rfr('src/controllers/option.js');
-const ServiceCore = rfr('src/services/index.js');
+const Log = require('./../helpers/logger');
+const Docker = require('./docker');
+const Status = require('./../helpers/status');
+const ConfigHelper = require('./../helpers/config');
+const Websocket = require('./../http/socket').ServerSockets;
+const UploadSocket = require('./../http/upload');
+const PackSystem = require('./pack');
+const FileSystem = require('./fs');
+const OptionController = require('./option');
+const ServiceCore = require('./../services/index');
+const Errors = require('./../errors/index');
 
 const Config = new ConfigHelper();
 
@@ -79,17 +77,11 @@ class Server extends EventEmitter {
         this.log = Log.child({ server: this.uuid });
         this.lastCrash = undefined;
         this.fs = new FileSystem(this);
-
-        if (this.status === Status.ON) {
-            // Server is running, lets reattach to the log stream is possible.
-            // Passing false as the second parameter will prevent the log that
-            // already exists from being overwritten if it is there still.
-            this.fs.getLogStream();
-        }
+        this.service = new ServiceCore(this);
 
         Async.series([
             callback => {
-                this.service = new ServiceCore(this, null, callback);
+                this.service.init().then(callback).catch(callback);
             },
             callback => {
                 this.initContainer(err => {
@@ -251,19 +243,6 @@ class Server extends EventEmitter {
             }
         }
 
-        if (status === Status.OFF) {
-            // Destroy the readable stream from the container. This fixes output buffer
-            // issues for servers with large amounts of data output. The stream will be
-            // destroyed after 2.5 seconds if it still exists.
-            setTimeout(() => {
-                if (this.status === Status.OFF && this.docker && isStream.isReadable(this.docker.stream)) {
-                    this.docker.stream.end();
-                    this.streamClosed();
-                    this.docker.stream = undefined;
-                }
-            }, 2500);
-        }
-
         switch (status) {
         case Status.OFF:
             this.emit('console', `${Ansi.style.cyan}[Pterodactyl Daemon] Server marked as ${Ansi.style.bold}OFF`);
@@ -292,7 +271,21 @@ class Server extends EventEmitter {
         if (this.status !== Status.STARTING) {
             return next(new Error('Server must be in starting state to run preflight.'));
         }
-        return this.service.onPreflight(next);
+
+        this.service.onPreflight().then(next).catch(err => {
+            if (err instanceof Errors.FileParseError) {
+                this.emit('console', `${Ansi.style.yellow}[Pterodactyl Daemon] Encountered an error while processing ${err.file} -- this could lead to issues running the server.`);
+                this.emit('console', `${Ansi.style.yellow}[Pterodactyl Daemon] ${err.message}`);
+
+                return next();
+            }
+
+            if (err instanceof Errors.NoEggConfigurationError) {
+                this.emit('console', `${Ansi.style['bg-red']}${Ansi.style.white}[Pterodactyl Daemon] No server egg configuration could be located; aborting startup.`);
+            }
+
+            return next(err);
+        });
     }
 
     start(next) {
@@ -317,21 +310,20 @@ class Server extends EventEmitter {
                     callback => {
                         this.emit('console', `${Ansi.style.cyan}[Pterodactyl Daemon] Your server container needs to be rebuilt. This should only take a few seconds, but could take a few minutes. You do not need to do anything else while this occurs. Your server will automatically continue with startup once this process is completed.`);
                         this.setStatus(Status.STOPPING);
+                        this.setStatus(Status.OFF);
                         this.rebuild(callback);
                     },
                     callback => {
-                        this.setStatus(Status.OFF);
+                        this.log.info('Completed rebuild process for server container.');
+                        this.emit('console', `${Ansi.style.green}[Pterodactyl Daemon] Completed rebuild process for server. Server is now booting.`);
                         this.start(callback);
                     },
                 ], err => {
                     if (err) {
                         this.setStatus(Status.OFF);
-                        const errorIdToken = Randomstring.generate(20);
-                        this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] An error was encountered while attempting to rebuild this container. Please contact your administrator for assistance. PTDL:ERR_ID:${errorIdToken}`);
+                        this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] A fatal error was encountered booting this container.`);
                         this.buildInProgress = false;
-                        this.log.error(err, {
-                            errorId: errorIdToken,
-                        });
+                        this.log.error(err);
                     }
                 });
             } else {
@@ -341,10 +333,6 @@ class Server extends EventEmitter {
         }
 
         Async.series([
-            callback => {
-                this.log.debug('Cleaning out old process logs...');
-                this.fs.removeOldLogFiles(callback);
-            },
             callback => {
                 this.log.debug('Checking size of server folder before booting.');
                 this.emit('console', `${Ansi.style.yellow}[Pterodactyl Daemon] Checking size of server data directory...`);
@@ -381,10 +369,6 @@ class Server extends EventEmitter {
                 this.emit('console', `${Ansi.style.green}[Pterodactyl Daemon] Starting server container.`);
                 this.docker.start(callback);
             },
-            callback => {
-                this.emit('console', `${Ansi.style.green}[Pterodactyl Daemon] Server container started. Attaching...`);
-                this.docker.attach(callback);
-            },
         ], err => {
             if (err) {
                 this.setStatus(Status.OFF);
@@ -398,11 +382,8 @@ class Server extends EventEmitter {
                     return next(new Error('Server container was not found and needs to be rebuilt. Your request has been accepted and will be processed once the rebuild is complete.'));
                 }
 
-                const errorIdToken = Randomstring.generate(20);
-                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Oh dear, it seems something has gone horribly wrong while attempting to boot this server. Please contact your administrator for assistance. PTDL:ERR_ID:${errorIdToken}`);
-                this.log.error(err, {
-                    errorId: errorIdToken,
-                });
+                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] A fatal error was encountered while starting this server.`);
+                this.log.error(err);
                 return next(err);
             }
 
@@ -410,6 +391,12 @@ class Server extends EventEmitter {
         });
     }
 
+    /**
+     * Stop a server using the defined egg stop capabilities.
+     *
+     * @param {Function} next
+     * @return {void|Function}
+     */
     stop(next) {
         if (this.status === Status.OFF) {
             return next();
@@ -421,6 +408,7 @@ class Server extends EventEmitter {
         }
 
         this.setStatus(Status.STOPPING);
+
         // So, technically docker sends a SIGTERM to the process when this is run.
         // This works out fine normally, however, there are times when a container might take
         // more than 10 seconds to gracefully stop, at which point docker resorts to sending
@@ -429,7 +417,57 @@ class Server extends EventEmitter {
         // So, what we will do is send a stop command, and then sit there and wait
         // until the container stops because the process stopped, at which point the crash
         // detection will not fire since we set the status to STOPPING.
-        this.command(_.get(this.service, 'config.stop'), next);
+        const stopCommand = _.get(this.service, 'config.stop');
+
+        // Maintain backwards compatability with old eggs that used ^C as a way of telling a container
+        // to stop using docker's default stop setup.
+        if (stopCommand === '^C') {
+            this.docker.stop(next);
+
+            return;
+        }
+
+        // If the stop command begins with a "^" we will interpret that as the desire to
+        // send a specific signal to the container to stop the application.
+        if (_.startsWith(stopCommand, '^')) {
+            this.docker.stopWithSignal(_.replace(stopCommand, '^', '')).then(next).catch(next);
+
+            return;
+        }
+
+        // Send the command to the instance to begin the shutdown procedures.
+        this.docker.write(stopCommand).then(next).catch(next);
+    }
+
+    /**
+     * Send a command to the server. If the command matches the stop argument, stop the server.
+     *
+     * @param {String} command
+     * @return {Promise<any>}
+     */
+    command(command) {
+        // If the server is offline don't attempt to send a command, it won't work...
+        if (this.status === Status.OFF) {
+            return new Promise(resolve => {
+                resolve();
+            });
+        }
+
+        // If this is the stop command, handle it correctly and pass it over to the
+        // stop function to do things.
+        if (command === _.get(this.service, 'config.stop')) {
+            return new Promise((resolve, reject) => {
+                this.stop(err => {
+                    if (err) {
+                        return reject(err);
+                    }
+
+                    resolve();
+                });
+            });
+        }
+
+        return this.docker.write(command);
     }
 
     kill(next) {
@@ -462,28 +500,13 @@ class Server extends EventEmitter {
     }
 
     /**
-     * Send command to server.
-     */
-    command(command, next) {
-        if (this.status === Status.OFF) {
-            return next(new Error('Server is currently stopped.'));
-        }
-
-        // Prevent a user sending a stop command manually from crashing the server.
-        if (_.startsWith(_.replace(_.trim(command), /^\/*/, ''), _.get(this.service, 'config.stop'))) {
-            this.setStatus(Status.STOPPING);
-        }
-
-        this.docker.write(command, next);
-    }
-
-    /**
-     * Determines if the container stream should have ended yet, if not, mark server crashed.
+     * Handle the server stream instance closing on us. Runs through to attempt to determine if this was
+     * an expected closing, or if it was a sudden crash. If it was a crash, restart the server, otherwise
+     * just continue with whatever process got us into this situation.
      */
     streamClosed() {
         if (this.status === Status.OFF || this.status === Status.STOPPING) {
             this.setStatus(Status.OFF);
-            this.service.onStop();
 
             if (this.shouldRestart) {
                 this.shouldRestart = false;
@@ -496,61 +519,58 @@ class Server extends EventEmitter {
             return;
         }
 
-        Async.series([
-            callback => {
-                this.service.onStop(callback);
-            },
-            callback => {
-                if (!_.get(this.json, 'container.crashDetection', true)) {
-                    this.setStatus(Status.OFF);
-                    this.log.warn('Server detected as potentially crashed but crash detection has been disabled on this server.');
-                    return;
-                }
-                callback();
-            },
-            callback => {
-                this.docker.inspect(callback);
-            },
-        ], (err, results) => {
-            if (err) {
-                this.log.fatal(err);
+        // Mark the server as off at this point, we don't do any further checks about
+        // the current status from here.
+        this.setStatus(Status.OFF);
+
+        // Inspect the instance to get the exit code results to display to the user and to determine
+        // how we should handle this crash.
+        this.docker.container.inspect().then(results => {
+            const props = {
+                ExitCode: results.State.ExitCode,
+                OOMKilled: results.State.OOMKilled,
+                Error: results.State.Error,
+            };
+
+            // If the server "crashed" with a normal exit code indicating that it was stopped successfully
+            // don't force it to reboot. This can happen if a plugin stops the server for someone.
+            if (!Config.get('internals.clean_exit_is_crash', true) && parseInt(props.ExitCode, 10) === 0 && !props.OOMKilled) {
                 return;
             }
 
-            const props = {
-                ExitCode: _.get(results, '2.State.ExitCode', ''),
-                OOMKilled: _.get(results, '2.State.OOMKilled', ''),
-                Error: _.get(results, '2.State.Error', ''),
-            };
-
-            if (_.isObject(_.get(results, 2))) {
-                this.emit('console', `${Ansi.style['bg-red']}${Ansi.style.white}[Pterodactyl Daemon] ---------- Detected server process in a crashed state! ----------`);
-                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Exit Code: ${Ansi.style.reset}${_.get(results, '2.State.ExitCode', '')}`);
-                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Out of Memory: ${Ansi.style.reset}${_.get(results, '2.State.OOMKilled', '')}`);
-                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Error Response: ${Ansi.style.reset}${_.get(results, '2.State.Error', '')}`);
+            // If crash detection is disabled for the server don't do anything.
+            if (!_.get(this.json, 'container.crashDetection', true)) {
+                this.log.warn(props, 'Server detected as entering a crashed state; crash handler is disabled; aborting reboot.');
+                return;
             }
 
+            this.emit('console', `${Ansi.style['bg-red']}${Ansi.style.white}[Pterodactyl Daemon] ---------- Detected server process in a crashed state! ----------`);
+            this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Exit Code: ${Ansi.style.reset}${props.ExitCode}`);
+            this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Out of Memory: ${Ansi.style.reset}${props.OOMKilled}`);
+            this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Error Response: ${Ansi.style.reset}${props.Error}`);
             this.emit('crashed');
-            this.setStatus(Status.OFF);
-            if (moment.isMoment(this.lastCrash)) {
-                if (moment(this.lastCrash).add(60, 'seconds').isAfter(moment())) {
-                    this.setCrashTime();
-                    this.log.warn(props, 'Server detected as crashed but has crashed within the last 60 seconds, aborting reboot.');
-                    this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Aborting automatic reboot due to crash within the last 60 seconds.`);
-                    return;
-                }
+
+            if (moment.isMoment(this.lastCrash) && moment(this.lastCrash).add(60, 'seconds').isAfter(moment())) {
+                this.setCrashTime();
+                this.log.warn(props, 'Server detected as crashed but has crashed within the last 60 seconds; aborting reboot.');
+                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Aborting automatic reboot due to crash within the last 60 seconds.`);
+
+                return;
             }
 
             this.log.warn(props, 'Server detected as crashed! Attempting server reboot.');
-            this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Attempting to reboot server now.`);
+            this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Server process detected as entering a crashed state; rebooting.`);
             this.setCrashTime();
 
-            this.start(startError => {
-                if (startError) this.log.fatal(startError);
+            this.start(err => {
+                if (err) throw err;
             });
-        });
+        }).catch(this.log.fatal);
     }
 
+    /**
+     * Set the last time that the server crashed.
+     */
     setCrashTime() {
         this.lastCrash = moment();
     }
@@ -637,11 +657,14 @@ class Server extends EventEmitter {
                 cpu: {
                     cores: perCoreUsage,
                     total: parseFloat(totalUsage.toFixed(3).toString()),
+                    limit: self.json.build.cpu,
                 },
                 disk: {
                     used: self.currentDiskUsed,
                     limit: self.json.build.disk,
+                    io_limit: self.json.build.io,
                 },
+                network: self.docker.procData.networks,
             };
             self.emit('proc', self.processData.process);
         });
@@ -762,7 +785,9 @@ class Server extends EventEmitter {
             }],
             init_service: ['update_config', (results, callback) => {
                 this.log.debug('Reinitializing egg core for server.');
-                this.service = new ServiceCore(this, null, callback);
+
+                this.service = new ServiceCore(this);
+                this.service.init().then(callback).catch(callback);
             }],
             init_container: ['init_service', (results, callback) => {
                 this.emit('console', `${Ansi.style.yellow}[Pterodactyl Daemon] Container is being initialized...`);
@@ -770,12 +795,6 @@ class Server extends EventEmitter {
             }],
         }, err => {
             this.buildInProgress = false;
-            if (!err) {
-                this.log.info('Completed rebuild process for server container.');
-                this.emit('console', `${Ansi.style.green}[Pterodactyl Daemon] Completed rebuild process for server. Server is now booting.`);
-                return next();
-            }
-
             return next(err);
         });
     }
@@ -859,7 +878,8 @@ class Server extends EventEmitter {
                     return callback(new Error('No Egg was passed to the server configuration, unable to select an egg.'));
                 }
 
-                this.service = new ServiceCore(this, null, callback);
+                this.service = new ServiceCore(this);
+                this.service.init().then(callback).catch(callback);
             },
             callback => {
                 this.pack = new PackSystem(this);

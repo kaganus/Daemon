@@ -94,7 +94,7 @@ class Option {
 
                 this.server.log.debug('Writing temporary file to be handed into the Docker container.');
                 Fs.outputFile(Path.join('/tmp/pterodactyl/', this.server.json.uuid, '/install.sh'), results.details.scripts.install, {
-                    mode: '0o644',
+                    mode: 0o644,
                     encoding: 'utf8',
                 }, callback);
             }],
@@ -115,7 +115,7 @@ class Option {
                 const LoggingLocation = Path.join(this.server.configDataLocation, 'install.log');
                 this.server.log.info('Writing output of installation process to file.', { file: LoggingLocation });
                 this.processLogger = createOutputStream(LoggingLocation, {
-                    mode: '0o644',
+                    mode: 0o644,
                     defaultEncoding: 'utf8',
                 });
                 return callback();
@@ -135,7 +135,7 @@ class Option {
                     environment.push(`${key}=${value}`);
                 });
 
-                DockerController.run(_.get(results.details, 'config.container', 'alpine:3.4'), [_.get(results.details, 'config.entry', 'ash'), './mnt/install/install.sh'], (Config.get('logger.level', 'info') === 'debug') ? process.stdout : this.processLogger, {
+                DockerController.run(_.get(results.details, 'config.container', 'alpine:3.4'), [_.get(results.details, 'config.entry', 'ash'), '/mnt/install/install.sh'], (Config.get('logger.level', 'info') === 'debug') ? process.stdout : this.processLogger, {
                     Tty: true,
                     AttachStdin: true,
                     AttachStdout: true,
@@ -163,6 +163,10 @@ class Option {
                 }, (err, data, container) => {
                     if (_.isObject(container) && _.isFunction(_.get(container, 'remove', null))) {
                         container.remove();
+                    }
+
+                    if (data.StatusCode !== 0) {
+                        return callback(new Error(`Install script failed with code ${data.StatusCode}`));
                     }
 
                     if (err) {
