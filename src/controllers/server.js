@@ -76,6 +76,7 @@ class Server extends EventEmitter {
         this.currentDiskUsed = 0;
         this.log = Log.child({ server: this.uuid });
         this.lastCrash = undefined;
+        this.subsequentCrash = 0;
         this.fs = new FileSystem(this);
         this.service = new ServiceCore(this);
 
@@ -550,12 +551,17 @@ class Server extends EventEmitter {
             this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Error Response: ${Ansi.style.reset}${props.Error}`);
             this.emit('crashed');
 
-            if (moment.isMoment(this.lastCrash) && moment(this.lastCrash).add(60, 'seconds').isAfter(moment())) {
-                this.setCrashTime();
-                this.log.warn(props, 'Server detected as crashed but has crashed within the last 60 seconds; aborting reboot.');
-                this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Aborting automatic reboot due to crash within the last 60 seconds.`);
-
-                return;
+            if (moment.isMoment(this.lastCrash) && moment(this.lastCrash).add(120, 'seconds').isAfter(moment())) {
+                this.subsequentCrash = this.subsequentCrash + 1;
+                if (this.subsequentCrash > 3) {
+                    this.setCrashTime();
+                    this.log.warn(props, 'Server detected as crashed ${this.subsequentCrash} times within 120 seconds of each other, aborting reboot.');
+                    this.emit('console', `${Ansi.style.red}[Pterodactyl Daemon] Aborting automatic reboot due to ${this.subsequentCrash} subsequent crashes within 120 seconds of each other.`);
+                    this.subsequentCrash = 0;
+                    return;
+                }
+            } else {
+                this.subsequentCrash = 1;
             }
 
             this.log.warn(props, 'Server detected as crashed! Attempting server reboot.');
