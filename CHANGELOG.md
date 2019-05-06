@@ -1,6 +1,32 @@
 # Changelog
 This file is a running track of new features and fixes to each version of the daemon released starting with `v0.2.0`.
 
+## v0.6.12 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a bug with the packs system that would not properly handle an error response from the panel resulting in the server
+getting stuck in a hung installation state.
+* Fixes a bug with how packs were downloaded and decompressed that resulted in them properly downloading but an error
+cropping up when decompressing their contents.
+
+### Changed
+* Install logs are no longer deleted when a server fails it's installation and is removed.
+
+### Added
+* Dockerfile for building an official docker image for the daemon. (uses the golang sftp-server)
+
+## v0.6.11 (Elasticized Elanodactylus)
+### Fixed
+* [Security] Addresses one remaining issue with the previous security fixes to completely isolate the host system from malicious users.
+
+## v0.6.10 (Elasticized Elanodactylus)
+### Fixed
+* Fixes a path resolution bug introduced in the previous version of the panel that was causing files and folders that did not exist to return the wrong resolved path.
+
+## v0.6.9 (Elasticized Elanodactylus)
+### Fixed
+* Updated diagnostics script to have a proper fallback domain to handle Hastebin outages.
+* **[Security]** Fixes an unauthorized file read outside of server directory vulnerability when working with the built-in filemanager or SFTP server.
+
 ## v0.6.8 (Elasticized Elanodactylus)
 ### Changed
 * Bumped internal thresholds for memory management in containers to provide slightly more overhead to avoid OOM issues.
